@@ -1,0 +1,8 @@
+[package]
+name    = "ability"
+version = "0.1.0"
+authors = ["Michael Hilgendorf <mike@hilgendorf.audio>"]
+edition = "2018"
+description = "Macros for creating traits with ABI-compatible interfaces across compiler versions"
+
+[dependencies]
