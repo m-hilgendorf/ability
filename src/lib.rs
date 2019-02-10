@@ -81,8 +81,8 @@ extern crate proc_macro;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TStream;
 use syn::{
-    Item, TraitItem, parse_macro_input, ItemTrait, ItemStruct,
-    punctuated::Punctuated, FnArg, token::Comma, Pat,
+    Ident, Item, TraitItem, parse_macro_input, ItemTrait, ItemStruct,
+    punctuated::Punctuated, FnArg, token::Comma, Pat, buffer::Cursor, buffer::TokenBuffer
 };
 use quote::quote;
 use std::iter::FromIterator;
@@ -92,9 +92,14 @@ pub fn interface (attr : TokenStream, item : TokenStream) -> TokenStream {
     let cloned = item.clone();
     let parsed : Item = parse_macro_input!(item as Item);
 
+    let args : Punctuated<syn::Ident, Comma> = Punctuated::from_iter(
+        attr.into_iter()
+            .step_by(2)
+            .map(|token| syn::parse::<syn::Ident>(token.into()).unwrap() )
+    );
     match parsed {
         Item::Trait(trait_) => trait_interface(&trait_),
-        Item::Struct(struct_) => struct_interface(&attr, &struct_),
+        Item::Struct(struct_) => struct_interface(args, &struct_),
         _ => cloned
     }
 }
@@ -154,8 +159,6 @@ fn trait_interface (trait_ : &ItemTrait) -> TokenStream {
         }
     }
     };
-    println!("{}", expanded);
-
     TokenStream::from (expanded)
 }
 
@@ -206,8 +209,59 @@ fn arg_idents (args : &Punctuated<FnArg, Comma>, keep_first : bool) -> Punctuate
     Punctuated::from_iter(it)
 }
 
-fn struct_interface(_ : &TokenStream, _ : &ItemStruct) -> TokenStream {
-    unimplemented!()
+fn struct_interface(traits : Punctuated<Ident, Comma>, struct_ : &ItemStruct) -> TokenStream {
+    let mut inner_get = quote!();
+    let mut inner_drop = quote!();
+
+    let ident = &struct_.ident;
+
+    for trait_ in &traits {
+        let mod_ = trait_.clone().prepend("ability_");
+        let vtable = trait_.clone().append("VTable");
+        let literal = format!(r#"{}"#, trait_);
+        let literal = &literal;
+        inner_get = inner_get.append (quote!{
+            #literal => Box::into_raw (
+                    Box::new(#mod_::#vtable::new::<#ident>())
+                ) as *const c_void,
+        });
+
+        inner_drop = inner_drop.append (quote!{
+            #literal => {let _ = Box::from_raw (vtable as *const #ident)},
+        });
+    }
+
+    let expanded = quote! {
+        #struct_
+
+        #[no_mangle]
+        pub extern fn get_ability (interface : *const std::os::raw::c_char) -> *const std::os::raw::c_void {
+            use std::{os::raw::c_void, ffi::CStr};
+
+            let cstr = unsafe { CStr::from_ptr(interface) };
+            let interface = cstr.to_str().expect("invalid identifier");
+
+            match interface {
+                #inner_get
+                _ => std::ptr::null()
+            }
+        }
+        #[no_mangle]
+        pub extern fn drop_ability (interface : *const std::os::raw::c_char, vtable : *const std::os::raw::c_void) {
+            use std::{os::raw::c_void, ffi::CStr};
+            let interface = unsafe { CStr::from_ptr(interface) }
+                .to_str()
+                .expect("invalid identifier");
+
+            match interface {
+                #inner_drop
+                _ => ()
+            }
+        }
+    };
+
+    println!("{}", expanded);
+    TokenStream::from(expanded)
 }
 
 trait Append <T> {
