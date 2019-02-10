@@ -97,38 +97,38 @@ fn trait_interface (trait_ : ItemTrait) -> TokenStream {
     };
     TokenStream::from (expanded)
 }
+// this enum is kind of a hacky workaround
 #[derive(Eq,PartialEq)]
 enum MethodLookup { ConstSelf, MutSelf, Static }
-
-//todo: converting arguments could be done cleaner
 fn convert_self (args : &Punctuated<FnArg, Comma>) -> (Punctuated<FnArg, Comma>, MethodLookup) {
-    let mut new_args = Punctuated::new();
     let mut lookup = MethodLookup::Static;
+    let it = args
+        .iter()
+        .map(|arg|{
+            match arg {
+                FnArg::SelfRef(self_ref) => {
+                    let sig =
+                        if self_ref.mutability.is_some() {
+                            lookup = MethodLookup::MutSelf;
+                            quote!(*mut std::os::raw::c_void)
+                        }
+                        else {
+                            lookup = MethodLookup::ConstSelf;
+                            quote!(*const std::os::raw::c_void)
+                        };
 
-    for arg in args.iter() {
-        match arg {
-            FnArg::SelfRef(self_ref) => {
-                let sig =
-                    if self_ref.mutability.is_some() { quote!(*mut std::os::raw::c_void)}
-                    else {quote!(*const std::os::raw::c_void)};
-
-                let new_arg = syn::ArgCaptured {
-                    pat         : syn::parse (quote!(self_).into()).unwrap(),
-                    colon_token : syn::parse (quote!(:).into()).unwrap(),
-                    ty          : syn::parse(sig.into()).unwrap()
-                };
-
-                //let new_arg = syn::parse (tokens).expect("failed to parse tokens");
-                new_args.push (FnArg::Captured(new_arg));
-                lookup = if self_ref.mutability.is_some() { MethodLookup::MutSelf}
-                         else { MethodLookup::ConstSelf };
-            },
-            _ => new_args.push(arg.clone())
-        }
-    }
-    (new_args, lookup)
+                    FnArg::Captured(syn::ArgCaptured {
+                        pat         : syn::parse(quote!(self_).into()).unwrap(),
+                        colon_token : syn::parse(quote!(:).into()).unwrap(),
+                        ty          : syn::parse(sig.into()).unwrap()
+                    })
+                },
+                _ => arg.clone()
+            }
+        });
+    (Punctuated::from_iter(it), lookup)
 }
-
+//todo: clean up the convert_self/arg_idents methods, they can be done cleaner.
 fn arg_idents (args : &Punctuated<FnArg, Comma>, keep_first : bool) -> Punctuated <Pat, Comma> {
     let it = args
         .iter()
@@ -146,3 +146,4 @@ fn arg_idents (args : &Punctuated<FnArg, Comma>, keep_first : bool) -> Punctuate
 fn struct_interface(_ : TokenStream, _ : ItemStruct) -> TokenStream {
     unimplemented!()
 }
+
