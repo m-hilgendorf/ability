@@ -1,3 +1,81 @@
+/*!
+    ability (**ABI** compati**bility**) is a crate for ABI compatibility via traits. The intended
+    use is to allow application developers to specify plugin/extension APIs using traits.
+
+    ## Usage ##
+
+    Add the `#[interface]` attribute to a trait you wwant to
+    ```rust
+    use ability::interface;
+
+    #[interface]
+    trait Trait {
+        fn foo(&self);
+        fn bar(&mut self);
+        fn baz();
+    }
+    ```
+
+    ## How it works ##
+
+    The above code generates a [virtual method table]() (vtable), which looks like this:
+
+    ```rust
+    #[allow(non_snake_case)]
+    #[allow(dead_code )]
+    pub mod ability_Trait {
+        use super::Trait;
+
+        pub extern fn foo <T : Trait> (self_ : * const std::os::raw::c_void) {
+            unsafe { (*(self_ as *const T)).foo() }
+        }
+        pub extern fn bar <T : Trait> (self_ : * mut std::os::raw::c_void) {
+            unsafe { (*(self_ as *mut T)).bar() }
+        }
+        pub extern fn baz <T : Trait>() {
+            unsafe { T :: baz() }
+         }
+
+        #[repr(C)]
+        pub struct
+        TraitVTable {
+            foo : extern fn (self_ : *const std::os::raw::c_void),
+            bar : extern fn (self_ : *mut std::os::raw::c_void),
+            baz : extern fn () ,
+        }
+
+        impl TraitVTable {
+            pub fn new <T : Trait> () -> Self {
+                Self {
+                    foo : foo::<T>,
+                    bar : bar::<T>,
+                    baz : baz::<T>,
+                }
+            }
+        }
+    }
+    ```
+
+    Generated code is placed in a new module which imports the wrapped trait. FFI methods (`extern`)
+    methods are declared that are generic over types that implement the wrapped trait.
+
+    The vtable is generic over types that implement the wrapped trait, and a constructor method is
+    provided to generate the vtable at runtime.
+
+    This is similar to how dynamic dispatch works "under the hood." This does not seek to replace
+    dynamic dispatch, just provide functionality across library boundaries that are compiled with
+    different compiler versions (e.g., plugins and application extensions distributed as shared
+    libraries).
+
+    ## On going work ##
+
+    - Limiting types that can pass across interface boundaries, to prevent subtle bugs from attempting
+    to use incompatible types.
+
+    - A sensible API for wrapping structs that implement the traits
+
+    - Generator/factory pattern to create a single entry point into a shared library
+*/
 #![allow(dead_code)]
 extern crate proc_macro;
 use proc_macro::TokenStream;
