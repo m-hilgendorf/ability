@@ -5,6 +5,7 @@ authors = ["Michael Hilgendorf <mike@hilgendorf.audio>"]
 edition = "2018"
 description = "Macros for creating traits with ABI-compatible interfaces across compiler versions"
 repository = "https://github.com/m-hilgendorf/ability.git"
+license = "Apache | MIT"
 
 [lib]
 proc-macro = true
