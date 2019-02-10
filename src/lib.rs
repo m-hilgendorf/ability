@@ -16,6 +16,19 @@
     }
     ```
 
+    In downstream crates you can add the same attribute to structs that implement the trait, marking
+    which traits it implements
+
+    ```rust
+    #[interface(Trait)]
+    struct Impl{}
+    impl Trait for Impl {
+        fn foo(&self) {/*...*/}
+        fn bar(&mut self) {/*...*/}
+        fn baz() {/*...*/}
+    }
+    ```
+
     ## How it works ##
 
     The above code generates a [virtual method table]() (vtable), which looks like this:
@@ -67,14 +80,27 @@
     different compiler versions (e.g., plugins and application extensions distributed as shared
     libraries).
 
+    When a struct implements the trait, the library will create a single entry point for loading the
+    vtable, which has the signature
+
+    ```rust
+    #[no_mangle]
+    extern fn get_ability (trait_ : *const c_char, vtable : *mut c_void);
+    ```
+
+    `trait_` is a null terminated C-string that needs to match the wrapped trait's identifier.
+    `vtable` should be a mutable pointer to an uninitialized instance of the vtable you wish to
+    construct.
+
+
     ## On going work ##
 
     - Limiting types that can pass across interface boundaries, to prevent subtle bugs from attempting
     to use incompatible types.
-
     - A sensible API for wrapping structs that implement the traits
-
     - Generator/factory pattern to create a single entry point into a shared library
+    - A safer interface that doesn't rely on uninitialized memory and raw pointers.
+
 */
 #![allow(dead_code)]
 extern crate proc_macro;
@@ -82,7 +108,7 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TStream;
 use syn::{
     Ident, Item, TraitItem, parse_macro_input, ItemTrait, ItemStruct,
-    punctuated::Punctuated, FnArg, token::Comma, Pat, buffer::Cursor, buffer::TokenBuffer
+    punctuated::Punctuated, FnArg, token::Comma, Pat
 };
 use quote::quote;
 use std::iter::FromIterator;
@@ -210,8 +236,7 @@ fn arg_idents (args : &Punctuated<FnArg, Comma>, keep_first : bool) -> Punctuate
 }
 
 fn struct_interface(traits : Punctuated<Ident, Comma>, struct_ : &ItemStruct) -> TokenStream {
-    let mut inner_get = quote!();
-    let mut inner_drop = quote!();
+    let mut inner = quote!();
 
     let ident = &struct_.ident;
 
@@ -220,14 +245,11 @@ fn struct_interface(traits : Punctuated<Ident, Comma>, struct_ : &ItemStruct) ->
         let vtable = trait_.clone().append("VTable");
         let literal = format!(r#"{}"#, trait_);
         let literal = &literal;
-        inner_get = inner_get.append (quote!{
-            #literal => Box::into_raw (
-                    Box::new(#mod_::#vtable::new::<#ident>())
-                ) as *const c_void,
-        });
 
-        inner_drop = inner_drop.append (quote!{
-            #literal => {let _ = Box::from_raw (vtable as *const #ident)},
+        inner = inner.append (quote!{
+            #literal => unsafe {
+                *(vtable as *mut #mod_::#vtable) = #mod_::#vtable::new::<#ident>()
+            },
         });
     }
 
@@ -235,26 +257,19 @@ fn struct_interface(traits : Punctuated<Ident, Comma>, struct_ : &ItemStruct) ->
         #struct_
 
         #[no_mangle]
-        pub extern fn get_ability (interface : *const std::os::raw::c_char) -> *const std::os::raw::c_void {
+        pub extern fn get_ability (
+            interface : *const std::os::raw::c_char,
+            vtable    : *mut   std::os::raw::c_void
+        ) {
             use std::{os::raw::c_void, ffi::CStr};
-
-            let cstr = unsafe { CStr::from_ptr(interface) };
-            let interface = cstr.to_str().expect("invalid identifier");
+            let interface = unsafe {
+                CStr::from_ptr(interface)
+                    .to_str()
+                    .expect("invalid identifier")
+            };
 
             match interface {
-                #inner_get
-                _ => std::ptr::null()
-            }
-        }
-        #[no_mangle]
-        pub extern fn drop_ability (interface : *const std::os::raw::c_char, vtable : *const std::os::raw::c_void) {
-            use std::{os::raw::c_void, ffi::CStr};
-            let interface = unsafe { CStr::from_ptr(interface) }
-                .to_str()
-                .expect("invalid identifier");
-
-            match interface {
-                #inner_drop
+                #inner
                 _ => ()
             }
         }
