@@ -34,13 +34,13 @@ pub trait MyTrait {
  For the moment, the passing of POD/C types is supported (pointers, integers, float, 
  structs marked `#[repr(C)]`, etc).
  
- If you need to pass more complicated data, serialize it and 
+ If you need to pass more complicated data, serialize it and pass as a pointer + length. 
 
 ## Roadmap ## 
 
--[ ] Documentation/examples
--[ ] Error messaging/failures for invalid traits 
--[ ] Clear description of limitations 
--[ ] Support for generics ? 
--[ ] Support for serializable types ?
--[ ] C header code generation
+- [ ] Documentation/examples
+- [ ] Error messaging/failures for invalid traits 
+- [ ] Clear description of limitations 
+- [ ] Support for generics ? 
+- [ ] Support for serializable types ?
+- [ ] C header code generation
