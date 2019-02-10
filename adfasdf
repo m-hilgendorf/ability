@@ -1,0 +1,208 @@
+[1mdiff --git a/Cargo.toml b/Cargo.toml[m
+[1mindex c05c0e0..34b2fb8 100644[m
+[1m--- a/Cargo.toml[m
+[1m+++ b/Cargo.toml[m
+[36m@@ -12,6 +12,7 @@[m [mproc-macro = true[m
+ [m
+ [dependencies][m
+ quote = "0.6.11"[m
+[32m+[m[32mproc-macro2 = "0.4.27"[m
+ [m
+ [dependencies.syn][m
+ version = "0.15.26"[m
+[1mdiff --git a/src/lib.rs b/src/lib.rs[m
+[1mindex a527f3e..0918619 100644[m
+[1m--- a/src/lib.rs[m
+[1m+++ b/src/lib.rs[m
+[36m@@ -1,7 +1,7 @@[m
+ #![allow(dead_code)][m
+[31m-[m
+ extern crate proc_macro;[m
+ use proc_macro::TokenStream;[m
+[32m+[m[32muse proc_macro2::TokenStream as TStream;[m
+ use syn::{[m
+     Item, TraitItem, parse_macro_input, ItemTrait, ItemStruct,[m
+     punctuated::Punctuated, FnArg, token::Comma, Pat,[m
+[36m@@ -16,7 +16,7 @@[m [mpub fn interface (attr : TokenStream, item : TokenStream) -> TokenStream {[m
+ [m
+     match parsed {[m
+         Item::Trait(trait_) => trait_interface(&trait_),[m
+[31m-        Item::Struct(struct_) => struct_interface(attr, struct_),[m
+[32m+[m[32m        Item::Struct(struct_) => struct_interface(&attr, &struct_),[m
+         _ => cloned[m
+     }[m
+ }[m
+[36m@@ -31,63 +31,45 @@[m [mfn trait_interface (trait_ : &ItemTrait) -> TokenStream {[m
+     for item in &trait_.items {[m
+         match item {[m
+             TraitItem::Method(method) => {[m
+[31m-                let sig = &method.sig;[m
+[31m-                let ident = &sig.ident;[m
+[31m-                let decl = &sig.decl;[m
+[31m-                let (args, lookup) = convert_self(&decl.inputs);[m
+[31m-                let call_args = arg_idents(&args, lookup == MethodLookup::Static);[m
+[31m-                let ret = &decl.output;[m
+[31m-[m
+[31m-                let method_lookup = match lookup {[m
+[31m-                    MethodLookup::Static => quote! {[m
+[31m-                        T::#ident ( #call_args )[m
+[31m-                    },[m
+[31m-                    MethodLookup::ConstSelf => quote! {[m
+[31m-                        (* (self_ as *const T)).#ident ( #call_args )[m
+[31m-                    },[m
+[31m-                    MethodLookup::MutSelf => quote! {[m
+[31m-                        (* (self_ as *mut T)).#ident ( #call_args )[m
+[31m-                    },[m
+[31m-                };[m
+[31m-[m
+[31m-                extern_methods = quote! {[m
+[31m-                    #extern_methods[m
+[31m-                    pub unsafe extern fn #ident <T: #trait_ident> (#args) #ret[m
+[31m-                    {    #method_lookup   }[m
+[31m-                };[m
+[31m-                struct_members = quote! {[m
+[31m-                    #struct_members[m
+[31m-                    #ident : unsafe extern fn ( #args ) #ret,[m
+[31m-                };[m
+[31m-                initializers = quote! {[m
+[31m-                    #initializers[m
+[31m-                    #ident: #ident::<T>,[m
+[31m-                };[m
+[32m+[m[32m                let ident = &method.sig.ident;[m
+[32m+[m[32m                let ret = &method.sig.decl.output;[m
+[32m+[m[32m                let (args, method) = convert_self(&method.sig.decl.inputs);[m
+[32m+[m[32m                let call_args = arg_idents(&args);[m
+[32m+[m
+[32m+[m[32m                extern_methods = extern_methods.append (quote! {[m
+[32m+[m[32m                    pub extern fn #ident <T: #trait_ident> (#args) # ret {[m
+[32m+[m[32m                        unsafe { #method #ident (#call_args) }[m
+[32m+[m[32m                    }[m
+[32m+[m[32m                });[m
+[32m+[m[32m                struct_members = struct_members.append (quote!{[m
+[32m+[m[32m                    #ident : extern fn (#*args) #ret,[m
+[32m+[m[32m                });[m
+[32m+[m[32m                initializers = initializers.append (quote!{[m
+[32m+[m[32m                    #ident : #ident::<T>,[m
+[32m+[m[32m                });[m
+             }[m
+             _ => ()[m
+         }[m
+     }[m
+[32m+[m[32m    let mod_= trait_ident.clone().prepend("ability_");[m
+[32m+[m[32m    let vtable = trait_ident.clone().append("VTable");[m
+ [m
+[31m-    let mod_ident    = format!("ability_{}", trait_ident);[m
+[31m-    let mod_ident = syn::Ident::new(&mod_ident, trait_ident.span());[m
+[31m-    let vtable_ident = format!("{}VTable", trait_ident);[m
+[31m-    let vtable_ident = syn::Ident::new(&vtable_ident, trait_ident.span());[m
+     let expanded = quote! {[m
+     #trait_[m
+ [m
+     #[allow(non_snake_case)][m
+     #[allow(dead_code)][m
+[31m-    pub mod #mod_ident {[m
+[32m+[m[32m    pub mod #mod_ {[m
+         use super::#trait_ident;[m
+ [m
+         #extern_methods[m
+ [m
+         #[repr(C)][m
+[31m-        pub struct #vtable_ident {[m
+[32m+[m[32m        pub struct #vtable {[m
+             #struct_members[m
+         }[m
+ [m
+[31m-        impl #vtable_ident {[m
+[32m+[m[32m        impl #vtable {[m
+             pub fn new <T: #trait_ident>() -> Self {[m
+                 Self { #initializers }[m
+             }[m
+[36m@@ -96,11 +78,11 @@[m [mfn trait_interface (trait_ : &ItemTrait) -> TokenStream {[m
+     };[m
+     TokenStream::from (expanded)[m
+ }[m
+[31m-// this enum is kind of a hacky workaround[m
+[31m-#[derive(Eq,PartialEq)][m
+[31m-enum MethodLookup { ConstSelf, MutSelf, Static }[m
+[31m-fn convert_self (args : &Punctuated<FnArg, Comma>) -> (Punctuated<FnArg, Comma>, MethodLookup) {[m
+[31m-    let mut lookup = MethodLookup::Static;[m
+[32m+[m
+[32m+[m[32m// maps &self/&mut self args to *const c_void/*mut c_void. The additional token stream result is[m
+[32m+[m[32m// used to wrap the method calls.[m
+[32m+[m[32mfn convert_self (args : &Punctuated<FnArg, Comma>) -> (Punctuated<FnArg, Comma>, TStream) {[m
+[32m+[m[32m    let mut lookup = quote!(T::);[m
+     let it = args[m
+         .iter()[m
+         .map(|arg|{[m
+[36m@@ -108,11 +90,11 @@[m [mfn convert_self (args : &Punctuated<FnArg, Comma>) -> (Punctuated<FnArg, Comma>,[m
+                 FnArg::SelfRef(self_ref) => {[m
+                     let sig =[m
+                         if self_ref.mutability.is_some() {[m
+[31m-                            lookup = MethodLookup::MutSelf;[m
+[32m+[m[32m                            lookup = quote!( (* (self as *mut T). ));[m
+                             quote!(*mut std::os::raw::c_void)[m
+                         }[m
+                         else {[m
+[31m-                            lookup = MethodLookup::ConstSelf;[m
+[32m+[m[32m                            lookup = quote!( (* (self as *const T). ));[m
+                             quote!(*const std::os::raw::c_void)[m
+                         };[m
+ [m
+[36m@@ -127,8 +109,17 @@[m [mfn convert_self (args : &Punctuated<FnArg, Comma>) -> (Punctuated<FnArg, Comma>,[m
+         });[m
+     (Punctuated::from_iter(it), lookup)[m
+ }[m
+[31m-//todo: clean up the convert_self/arg_idents methods, they can be done cleaner.[m
+[31m-fn arg_idents (args : &Punctuated<FnArg, Comma>, keep_first : bool) -> Punctuated <Pat, Comma> {[m
+[32m+[m
+[32m+[m[32mfn arg_idents (args : &Punctuated<FnArg, Comma>) -> Punctuated <Pat, Comma> {[m
+[32m+[m[32m    // little hacky here, needed to check if the first argument in the arg list needs to[m
+[32m+[m[32m    // be preserved (IE if it's a static trait method))[m
+[32m+[m[32m    let keep_first = if let Some(item) = args.iter().peekable().peek() {[m
+[32m+[m[32m        match *item {[m
+[32m+[m[32m            FnArg::SelfRef(_) => false,[m
+[32m+[m[32m            _ => true,[m
+[32m+[m[32m        }[m
+[32m+[m[32m    } else { true };[m
+[32m+[m
+     let it = args[m
+         .iter()[m
+         .skip(if keep_first {0} else {1})[m
+[36m@@ -142,7 +133,35 @@[m [mfn arg_idents (args : &Punctuated<FnArg, Comma>, keep_first : bool) -> Punctuate[m
+     Punctuated::from_iter(it)[m
+ }[m
+ [m
+[31m-fn struct_interface(_ : TokenStream, _ : ItemStruct) -> TokenStream {[m
+[32m+[m[32mfn struct_interface(_ : &TokenStream, _ : &ItemStruct) -> TokenStream {[m
+     unimplemented!()[m
+ }[m
+ [m
+[32m+[m[32mtrait Append <T> {[m
+[32m+[m[32m    fn append(self, suffix : T) -> Self;[m
+[32m+[m[32m    fn prepend(self, prefix : T) -> Self;[m
+[32m+[m[32m}[m
+[32m+[m
+[32m+[m[32mimpl<'a> Append<&'a str> for syn::Ident {[m
+[32m+[m[32m    fn append (self, suffix : &str) -> Self {[m
+[32m+[m[32m        let s = format!("{}{}", self, suffix);[m
+[32m+[m[32m        syn::Ident::new(&s, self.span())[m
+[32m+[m[32m    }[m
+[32m+[m
+[32m+[m[32m    fn prepend (self, prefix : &str) -> Self {[m
+[32m+[m[32m        let s = format!("{}{}", prefix, self);[m
+[32m+[m[32m        syn::Ident::new(&s, self.span())[m
+[32m+[m[32m    }[m
+[32m+[m[32m}[m
+[32m+[m
+[32m+[m[32mimpl Append<TStream> for TStream {[m
+[32m+[m[32m    fn append(mut self, suffix : TStream) -> Self {[m
+[32m+[m[32m        self.extend(suffix);[m
+[32m+[m[32m        self[m
+[32m+[m[32m    }[m
+[32m+[m
+[32m+[m[32m    fn prepend(self, mut prefix : TStream) -> Self {[m
+[32m+[m[32m        prefix.extend (self);[m
+[32m+[m[32m        prefix[m
+[32m+[m[32m    }[m
+[32m+[m[32m}[m
+\ No newline at end of file[m

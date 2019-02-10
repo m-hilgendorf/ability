@@ -1,7 +1,7 @@
 #![allow(dead_code)]
-
 extern crate proc_macro;
 use proc_macro::TokenStream;
+use proc_macro2::TokenStream as TStream;
 use syn::{
     Item, TraitItem, parse_macro_input, ItemTrait, ItemStruct,
     punctuated::Punctuated, FnArg, token::Comma, Pat,
@@ -15,105 +15,90 @@ pub fn interface (attr : TokenStream, item : TokenStream) -> TokenStream {
     let parsed : Item = parse_macro_input!(item as Item);
 
     match parsed {
-        Item::Trait(trait_) => trait_interface(trait_),
-        Item::Struct(struct_) => struct_interface(attr, struct_),
+        Item::Trait(trait_) => trait_interface(&trait_),
+        Item::Struct(struct_) => struct_interface(&attr, &struct_),
         _ => cloned
     }
-  //  cloned
 }
 
-fn trait_interface (trait_ : ItemTrait) -> TokenStream {
+// generates a vtable for a trait
+fn trait_interface (trait_ : &ItemTrait) -> TokenStream {
     let mut extern_methods = quote!{};
     let mut struct_members = quote!{};
     let mut initializers   = quote!{};
-    let trait_ident  = trait_.ident.clone();
-    let cloned = trait_.clone();
+    let trait_ident  = &trait_.ident;
 
-    for item in &cloned.items {
+    for item in &trait_.items {
         match item {
             TraitItem::Method(method) => {
-                let sig = &method.sig;
-                let ident = &sig.ident;
-                let decl = &sig.decl;
-                let (args, lookup) = convert_self(&decl.inputs);
-                let call_args = arg_idents(&args, lookup == MethodLookup::Static);
-                let ret = &decl.output;
+                let ident = &method.sig.ident;
+                let ret = &method.sig.decl.output;
+                let (args, method, keep_first) =
+                    convert_self(&method.sig.decl.inputs);
+                let call_args = arg_idents(&args, keep_first);
 
-                let method_lookup = match lookup {
-                    MethodLookup::Static => quote! {
-                        T::#ident ( #call_args )
-                    },
-                    MethodLookup::ConstSelf => quote! {
-                        (* (self_ as *const T)).#ident ( #call_args )
-                    },
-                    MethodLookup::MutSelf => quote! {
-                        (* (self_ as *mut T)).#ident ( #call_args )
-                    },
-                };
-
-                extern_methods = quote! {
-                    #extern_methods
-                    pub unsafe extern fn #ident <T: #trait_ident> (#args) #ret
-                    {    #method_lookup   }
-                };
-                struct_members = quote! {
-                    #struct_members
-                    #ident : unsafe extern fn ( #args ) #ret,
-                };
-                initializers = quote! {
-                    #initializers
-                    #ident: #ident::<T>,
-                };
+                extern_methods = extern_methods.append (quote! {
+                    pub extern fn #ident <T: #trait_ident> (#args) # ret {
+                        unsafe { #method #ident (#call_args) }
+                    }
+                });
+                struct_members = struct_members.append (quote!{
+                    #ident : extern fn (#args) #ret,
+                });
+                initializers = initializers.append (quote!{
+                    #ident : #ident::<T>,
+                });
             }
             _ => ()
         }
     }
-
-    let mod_ident    = format!("ability_{}", trait_ident);
-    let mod_ident = syn::Ident::new(&mod_ident, trait_ident.span());
-    let vtable_ident = format!("{}VTable", trait_ident);
-    let vtable_ident = syn::Ident::new(&vtable_ident, trait_ident.span());
+    let mod_= trait_ident.clone().prepend("ability_");
+    let vtable = trait_ident.clone().append("VTable");
     let expanded = quote! {
     #trait_
 
     #[allow(non_snake_case)]
     #[allow(dead_code)]
-    pub mod #mod_ident {
+    pub mod #mod_ {
         use super::#trait_ident;
 
         #extern_methods
 
         #[repr(C)]
-        pub struct #vtable_ident {
+        pub struct #vtable {
             #struct_members
         }
 
-        impl #vtable_ident {
+        impl #vtable {
             pub fn new <T: #trait_ident>() -> Self {
                 Self { #initializers }
             }
         }
     }
     };
+    println!("{}", expanded);
+
     TokenStream::from (expanded)
 }
-// this enum is kind of a hacky workaround
-#[derive(Eq,PartialEq)]
-enum MethodLookup { ConstSelf, MutSelf, Static }
-fn convert_self (args : &Punctuated<FnArg, Comma>) -> (Punctuated<FnArg, Comma>, MethodLookup) {
-    let mut lookup = MethodLookup::Static;
+
+// maps &self/&mut self args to *const c_void/*mut c_void. The additional token stream result is
+// used to wrap the method calls.
+fn convert_self (args : &Punctuated<FnArg, Comma>) -> (Punctuated<FnArg, Comma>, TStream, bool) {
+    let mut lookup = quote!(T::);
+    let mut keep_first = true;
     let it = args
         .iter()
         .map(|arg|{
             match arg {
                 FnArg::SelfRef(self_ref) => {
+                    keep_first = false;
                     let sig =
                         if self_ref.mutability.is_some() {
-                            lookup = MethodLookup::MutSelf;
+                            lookup = quote!( (* (self_ as *mut T) ) . );
                             quote!(*mut std::os::raw::c_void)
                         }
                         else {
-                            lookup = MethodLookup::ConstSelf;
+                            lookup = quote!( (* (self_ as *const T)) . );
                             quote!(*const std::os::raw::c_void)
                         };
 
@@ -126,9 +111,9 @@ fn convert_self (args : &Punctuated<FnArg, Comma>) -> (Punctuated<FnArg, Comma>,
                 _ => arg.clone()
             }
         });
-    (Punctuated::from_iter(it), lookup)
+    (Punctuated::from_iter(it), lookup, keep_first)
 }
-//todo: clean up the convert_self/arg_idents methods, they can be done cleaner.
+
 fn arg_idents (args : &Punctuated<FnArg, Comma>, keep_first : bool) -> Punctuated <Pat, Comma> {
     let it = args
         .iter()
@@ -143,7 +128,35 @@ fn arg_idents (args : &Punctuated<FnArg, Comma>, keep_first : bool) -> Punctuate
     Punctuated::from_iter(it)
 }
 
-fn struct_interface(_ : TokenStream, _ : ItemStruct) -> TokenStream {
+fn struct_interface(_ : &TokenStream, _ : &ItemStruct) -> TokenStream {
     unimplemented!()
 }
 
+trait Append <T> {
+    fn append(self, suffix : T) -> Self;
+    fn prepend(self, prefix : T) -> Self;
+}
+
+impl<'a> Append<&'a str> for syn::Ident {
+    fn append (self, suffix : &str) -> Self {
+        let s = format!("{}{}", self, suffix);
+        syn::Ident::new(&s, self.span())
+    }
+
+    fn prepend (self, prefix : &str) -> Self {
+        let s = format!("{}{}", prefix, self);
+        syn::Ident::new(&s, self.span())
+    }
+}
+
+impl Append<TStream> for TStream {
+    fn append(mut self, suffix : TStream) -> Self {
+        self.extend(suffix);
+        self
+    }
+
+    fn prepend(self, mut prefix : TStream) -> Self {
+        prefix.extend (self);
+        prefix
+    }
+}
