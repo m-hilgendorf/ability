@@ -29,6 +29,8 @@ pub trait MyTrait {
 }
 ```
 
+To implement interfaces for a binary 
+
 ## Limitations
 
  For the moment, the passing of POD/C types is supported (pointers, integers, float, 
@@ -44,3 +46,4 @@ pub trait MyTrait {
 - [ ] Support for generics ? 
 - [ ] Support for serializable types ?
 - [ ] C header code generation
+- [ ] Simpler, safer API for binaries that load the traits
